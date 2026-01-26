@@ -1,0 +1,104 @@
+# =========================
+# C / C++ build artifacts
+# =========================
+
+# Default build folder
+build
+
+# Object files
+*.o
+*.obj
+*.lo
+*.la
+
+# Executables
+*.exe
+*.out
+*.app
+a.out
+
+# Static and shared libraries
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+
+# =========================
+# Build directories
+# =========================
+
+build/
+build-*/
+cmake-build-*/
+dist/
+out/
+
+# =========================
+# Dependency files
+# =========================
+
+*.d
+
+# =========================
+# Debug / profiling output
+# =========================
+
+*.gdb
+gdb.txt
+vgcore.*
+callgrind.out.*
+perf.data
+perf.data.old
+cachegrind.out.*
+
+# =========================
+# Core dumps
+# =========================
+
+core
+core.*
+*.core
+
+# =========================
+# IDE / editor files
+# =========================
+
+# VS Code
+.vscode/
+
+# CLion / IntelliJ
+.idea/
+cmake-build-debug/
+cmake-build-release/
+
+# Vim
+*.swp
+*.swo
+*.swn
+*~
+
+# Emacs
+\#*\#
+.\#*
+
+# =========================
+# OS-specific files
+# =========================
+
+# macOS
+.DS_Store
+
+# Linux
+*.pid
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# =========================
+# Logs and temporary files
+# =========================
+
+*.log
+tmp/
