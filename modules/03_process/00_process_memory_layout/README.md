@@ -2,7 +2,7 @@
 
 ## Preparation
 
-In this folder, compile `test.c` to get executable file `test`
+In this folder, compile `test.c` to get executable file `test` in folder `build`.
 
 ```bash
 make
