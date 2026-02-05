@@ -70,9 +70,11 @@ Enable concurrent requests by adding `--max-inflight 10` large than 1.
 
 ## API Hints
 
-Absolutely — here is a **concise, minimal list** containing **only the APIs actually used in this assignment**, grouped by purpose, with one-line explanations.
+Basic Python learning materials: [W3Schools](https://www.w3schools.com/python/python_intro.asp)
 
 ### 1) Networking (`socket`)
+
+References: [Library API Doc](https://docs.python.org/3/library/socket.html), [Tutorial](https://docs.python.org/3/howto/sockets.html).
 
 * `socket.socket(AF_INET, SOCK_STREAM)`
   Create a TCP socket.
@@ -101,24 +103,9 @@ Absolutely — here is a **concise, minimal list** containing **only the APIs ac
 * `sock.close()` / `conn.close()`
   Close socket cleanly.
 
-### 2) Threading (`threading`)
+### 2) Work Queue (`queue`)
 
-* `threading.Thread(target=..., daemon=True)`
-  Create threads (accept loop, client readers, workers).
-
-* `Thread.start()`
-  Start thread execution.
-
-* `Thread.join(timeout)`
-  Wait for thread termination.
-
-* `threading.Lock()`
-  Protect shared data and serialize socket writes.
-
-* `threading.Event()`
-  Signal threads to stop.
-
-### 3) Work Queue (`queue`)
+References: [Library API Doc](https://docs.python.org/3/library/queue.html)
 
 * `queue.Queue(maxsize)`
   Bounded task queue.
@@ -137,3 +124,65 @@ Absolutely — here is a **concise, minimal list** containing **only the APIs ac
 
 * `queue.Full`
   Exception when queue is full.
+
+### 3) Threading (`threading`)
+
+References: [Library API Doc](https://docs.python.org/3/library/threading.html)
+
+* `threading.Thread(target=..., daemon=True)`
+  Create threads (accept loop, client readers, workers).
+
+* `Thread.start()`
+  Start thread execution.
+
+* `Thread.join(timeout)`
+  Wait for thread termination.
+
+* `threading.Lock()`
+  Protect shared data and serialize socket writes.
+
+* `threading.Event()`
+  Signal threads to stop.
+
+Learn from the minimal example:
+
+```python
+import threading
+import time
+
+# Shared resource
+counter = 0
+# Create a lock object
+lock = threading.Lock()
+
+def increment_counter():
+    """
+    Function for threads to increment the counter safely using a lock.
+    """
+    global counter
+    for _ in range(100000):
+        # Acquire the lock before accessing the shared resource (counter)
+        with lock:
+            # Critical section: only one thread can execute this at a time
+            counter += 1
+        # The lock is automatically released when exiting the 'with' block
+
+def main():
+    # Create two threads
+    t1 = threading.Thread(target=increment_counter)
+    t2 = threading.Thread(target=increment_counter)
+
+    # Start both threads
+    t1.start()
+    t2.start()
+
+    # Wait for both threads to complete
+    t1.join()
+    t2.join()
+
+    print(f"Expected counter value: 200000")
+    print(f"Actual counter value:   {counter}")
+
+if __name__ == "__main__":
+    main()
+```
