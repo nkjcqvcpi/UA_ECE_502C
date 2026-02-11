@@ -82,10 +82,27 @@ class ThreadPoolServer:
         Start worker threads + accept loop + stats reporter.
         """
         # TODO(1): start worker threads (self.workers), each runs self._worker_loop
-        # TODO(2): start accept loop in a thread (self._accept_loop)
-        # TODO(3): start stats reporter thread (self._stats_loop)
+        for i in range(self.workers):
+            t = threading.Thread(target=self._worker_loop, args=(i,), daemon=True)
+            self._threads.append(t)
+            t.start()
 
-        raise NotImplementedError
+        # TODO(2): start accept loop in a thread (self._accept_loop)
+        self._accept_thread = threading.Thread(target=self._accept_loop, daemon=True)
+        self._accept_thread.start()
+
+        # TODO(3): start stats reporter thread (self._stats_loop)
+        t = threading.Thread(target=self._stats_loop, daemon=True)
+        self._threads.append(t)
+        t.start()
+        
+        # Block until stopped
+        try:
+            while not self._stop.is_set():
+                time.sleep(1.0)
+        except KeyboardInterrupt:
+            # Propagate interrupt to main
+            raise
 
     def stop(self) -> None:
         """
@@ -122,16 +139,49 @@ class ThreadPoolServer:
         Each client may send many requests; handle line-by-line.
         """
         # TODO(4): create listening socket, accept connections in a loop until stop
-        #         For each client connection:
-        #           - set TCP_NODELAY (optional)
-        #           - read data, split into lines
-        #           - for each line:
-        #               - enqueue Task(conn, addr, line, time.time())
-        #               - if queue full: either block OR reject (depending on reject_when_full)
-        #                 If rejecting: send "ERR server busy\n"
-        #
-        # IMPORTANT: do NOT process requests here; only enqueue.
-        raise NotImplementedError
+        server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server_sock.bind((self.host, self.port))
+        server_sock.listen()
+        server_sock.settimeout(1.0)
+
+        def handle_client(conn, addr):
+            try:
+                conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                # Use makefile for easier buffering and line iteration
+                with conn, conn.makefile('r', encoding='utf-8', errors='replace') as f:
+                    for line in f:
+                        if self._stop.is_set():
+                            break
+                        task = Task(conn=conn, addr=addr, line=line, enqueued_at=time.time())
+                        try:
+                            if self.reject_when_full:
+                                self.task_q.put(task, block=True, timeout=1.0)
+                            else:
+                                self.task_q.put(task)
+                        except queue.Full:
+                            # Reject
+                            try:
+                                conn.sendall(b"ERR server busy\n")
+                            except OSError:
+                                pass
+                            continue
+            except (OSError, ValueError):
+                pass
+        
+        try:
+            while not self._stop.is_set():
+                try:
+                    conn, addr = server_sock.accept()
+                except socket.timeout:
+                    continue
+                except OSError:
+                    break
+                
+                t = threading.Thread(target=handle_client, args=(conn, addr), daemon=True)
+                t.start()
+        finally:
+            server_sock.close()
 
     def _worker_loop(self, worker_id: int) -> None:
         """
@@ -150,12 +200,9 @@ class ThreadPoolServer:
 
             try:
                 # TODO(5): send response back to client safely
-                # NOTE: multiple workers may write to the same conn concurrently if client pipelines.
-                #       To keep it simple, you can:
-                #         (A) add a per-connection lock map, OR
-                #         (B) require client to wait for response before sending next (our client does),
-                #             and assume no concurrent writes for same conn.
-                task.conn.sendall(resp_line.encode("utf-8"))
+                # Using the global lock to ensure safety for concurrent writes to the same conn
+                with self._lock:
+                    task.conn.sendall(resp_line.encode("utf-8"))
             except (BrokenPipeError, ConnectionResetError, OSError):
                 pass
 
