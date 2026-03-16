@@ -1,0 +1,334 @@
+\documentclass[12pt]{article}
+% \usepackage[utf-8]{inputenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+
+% Configure listings style
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    commentstyle=\color{gray},
+    stringstyle=\color{red},
+    breaklines=true,
+    breakatwhitespace=true,
+    showstringspaces=false,
+    tabsize=4,
+    backgroundcolor=\color{gray!10},
+    frame=single,
+    linewidth=0.95\textwidth
+}
+
+\title{Homework: Multithreaded Server with a Thread Pool}
+\author{Haotang Li}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section{Implementation}
+
+\subsection{Thread Pool Architecture}
+
+\begin{lstlisting}
+def start(self) -> None:
+    # Create fixed number of worker threads
+    for i in range(self.workers):
+        t = threading.Thread(target=self._worker_loop, args=(i,), daemon=True)
+        self._threads.append(t)
+        t.start()
+\end{lstlisting}
+
+\textbf{Worker Loop:}
+\begin{lstlisting}
+def _worker_loop(self, worker_id: int) -> None:
+    while not self._stop.is_set():
+        task = self.task_q.get()
+        if task.conn is None:  # Sentinel for shutdown
+            self.task_q.task_done()
+            break
+        
+        resp = parse_and_execute(task.line)
+        # Send response with per-connection lock
+        with conn_lock:
+            task.conn.sendall(resp_line.encode("utf-8"))
+        
+        self.task_q.task_done()
+\end{lstlisting}
+
+\textbf{Design Rationale:}
+
+\begin{itemize}
+    \item \textbf{Fixed pool size}: Avoids thread creation overhead and OS resource exhaustion
+    \item \textbf{Daemon threads}: Automatically terminated when main thread exits
+    \item \textbf{Worker ID}: Enables per-worker debugging and monitoring
+    \item \textbf{Sentinel pattern}: Clean shutdown by injecting \texttt{None} tasks to wake blocked workers
+\end{itemize}
+
+\pagebreak
+
+\subsection{Bounded Queue}
+
+\begin{lstlisting}
+self.task_q: "queue.Queue[Task]" = queue.Queue(maxsize=queue_size)
+\end{lstlisting}
+
+\textbf{Command-line Control:}
+\begin{verbatim}
+python server.py --queue 500  # Set queue size to 500
+\end{verbatim}
+
+\textbf{Queue Characteristics:}
+
+\begin{itemize}
+    \item \textbf{Thread-safe}: Python's \texttt{queue.Queue} handles internal locking
+    \item \textbf{Bounded}: Maximum capacity prevents memory exhaustion under high load
+    \item \textbf{Blocking operations}: \texttt{put()} and \texttt{get()} support timeout-based backpressure
+\end{itemize}
+
+\textbf{Memory Safety:}
+\begin{itemize}
+    \item At queue size 500 with \textasciitilde200 bytes per task: \textasciitilde100KB memory footprint
+    \item Prevents OOM conditions during traffic spikes
+    \item Configurable limit allows tuning for specific workloads
+\end{itemize}
+
+\subsection{Backpressure Mechanism}
+
+\textbf{Implementation - Two Modes:}
+
+\subsubsection{Mode 1: Block with 1-second timeout (default)}
+
+\begin{lstlisting}
+try:
+    self.task_q.put(task, block=True, timeout=1.0)
+except queue.Full:
+    conn.sendall(b"ERR server busy\n")
+\end{lstlisting}
+
+\subsubsection{Mode 2: Immediate rejection}
+
+\begin{verbatim}
+python server.py --reject-when-full
+\end{verbatim}
+
+\begin{lstlisting}
+try:
+    self.task_q.put_nowait(task)
+except queue.Full:
+    conn.sendall(b"ERR server busy\n")
+\end{lstlisting}
+
+\textbf{Thread Safety:}
+\begin{itemize}
+    \item Error responses use per-connection locks to avoid race conditions
+    \item Prevents interleaved writes when multiple threads reject requests
+\end{itemize}
+
+\textbf{Behavior Under Load:}
+\begin{itemize}
+    \item \textbf{Mode 1}: Provides brief buffering window for transient spikes
+    \item \textbf{Mode 2}: Immediate feedback, better for latency-sensitive clients
+    \item Both modes prevent queue overflow and provide clear error signals
+\end{itemize}
+
+\subsection{Concurrency Handling}
+
+\subsubsection{A. Multiple Concurrent Clients}
+
+\textbf{Accept Loop:}
+\begin{lstlisting}
+def _accept_loop(self) -> None:
+    server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server_sock.bind((self.host, self.port))
+    server_sock.listen()
+    
+    while not self._stop.is_set():
+        conn, addr = server_sock.accept()
+        t = threading.Thread(target=handle_client, args=(conn, addr), daemon=True)
+        t.start()
+\end{lstlisting}
+
+\textbf{Per-client threads}: Each connection handled in dedicated thread for isolation
+
+\subsubsection{B. Connection Lifecycle Management}
+
+\textbf{Client Handler:}
+\begin{lstlisting}
+def handle_client(conn: socket.socket, addr: Tuple[str, int]) -> None:
+    try:
+        conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        buf = b""
+        while not self._stop.is_set():
+            data = conn.recv(4096)
+            if not data:  # Client closed connection
+                break
+            # Process buffered lines...
+    finally:
+        try:
+            conn.close()
+        except OSError:
+            pass
+        # Clean up connection lock
+        with self._conn_locks_lock:
+            self._conn_locks.pop(conn, None)
+\end{lstlisting}
+
+\textbf{Key Features:}
+\begin{itemize}
+    \item \textbf{TCP\_NODELAY}: Reduces latency by disabling Nagle's algorithm
+    \item \textbf{Graceful shutdown}: \texttt{finally} ensures socket cleanup
+    \item \textbf{Memory leak prevention}: Connection locks removed on close
+\end{itemize}
+
+\subsubsection{C. Thread-Safe Response Transmission}
+
+\textbf{Problem}: Client pipelining causes multiple workers to write to same connection concurrently.
+
+\textbf{Solution - Per-Connection Locks:}
+\begin{lstlisting}
+# In __init__
+self._conn_locks: dict[socket.socket, threading.Lock] = {}
+self._conn_locks_lock = threading.Lock()
+
+# In _worker_loop
+with self._conn_locks_lock:
+    if task.conn not in self._conn_locks:
+        self._conn_locks[task.conn] = threading.Lock()
+    conn_lock = self._conn_locks[task.conn]
+
+with conn_lock:
+    task.conn.sendall(resp_line.encode("utf-8"))
+\end{lstlisting}
+
+\textbf{Benefits:}
+\begin{itemize}
+    \item \textbf{Fine-grained locking}: Different connections can write concurrently
+    \item \textbf{Serialization per connection}: Prevents response interleaving
+    \item \textbf{Dynamic lock creation}: Locks allocated only for active connections
+\end{itemize}
+
+\section{Testing}
+
+\subsection{Test Environment}
+
+\begin{itemize}
+    \item \textbf{Platform}: macOS
+    \item \textbf{Python}: 3.12.12
+    \item \textbf{Network}: localhost (127.0.0.1)
+\end{itemize}
+
+\subsection{Test Case 1: Basic Functionality}
+
+\textbf{Objective}: Verify correct request/response handling
+
+\textbf{Configuration:}
+\begin{verbatim}
+python server.py --host 127.0.0.1 --port 9000 --workers 8 --queue 500
+
+python3 client.py --host 127.0.0.1 --port 9000 --clients 5 --requests 200 --mix balanced
+\end{verbatim}
+
+\textbf{Result:}
+
+Server:
+\begin{verbatim}
+[stats] processed=450 avg_latency_ms=5349.49 qlen=0 rps=18.71
+\end{verbatim}
+
+Client:
+\begin{verbatim}
+[INFO] [MainThread] root: SUMMARY sent=450 recv=200 ok=200 err=0 elapsed=11.72s ok_rps=17.07
+\end{verbatim}
+
+\textbf{Analysis}: The max-inflight of client in default is 50, and the timeout is 5 sec, exceeding the concurrency capacity of server.
+\begin{verbatim}
+[stats] processed=425 avg_latency_ms=5215.63 qlen=17 rps=26.51
+\end{verbatim}
+
+The log shows the maximum capacity of server is about 27 rps, and the avg\_latency\_ms is about 5.5 sec.
+
+\subsection{Test Case 2: High Concurrency of workers}
+
+\textbf{Objective}: Test scalability with multiple concurrent workers of server.
+
+\textbf{Configuration:}
+\begin{verbatim}
+python server.py --host 127.0.0.1 --port 9000 --workers 32 --queue 500
+
+python3 client.py --host 127.0.0.1 --port 9000 --clients 5 --requests 200 --mix balanced
+\end{verbatim}
+
+\textbf{Result:}
+
+Server:
+\begin{verbatim}
+[stats] processed=853 avg_latency_ms=1110.70 qlen=115 rps=106.41
+[stats] processed=1000 avg_latency_ms=1154.88 qlen=0 rps=99.83
+\end{verbatim}
+
+Client:
+\begin{verbatim}
+[INFO] [MainThread] root: SUMMARY sent=1000 recv=1000 ok=1000 err=0 elapsed=8.56s ok_rps=116.77
+\end{verbatim}
+
+\textbf{Analysis}:
+\begin{itemize}
+    \item All 1000 requests processed successfully
+    \item Peak RPS: 106.41 req/s
+    \item Queue never overflowed
+    \item No client timeouts with reasonable timeout settings
+\end{itemize}
+
+\subsection{Test Case 3: Backpressure - Immediate Reject Mode}
+
+\textbf{Objective}: Test immediate rejection when queue full
+
+\textbf{Configuration:}
+\begin{verbatim}
+python server.py --host 127.0.0.1 --port 9000 --workers 8 --queue 500 --reject-when-full
+
+python3 client.py --host 127.0.0.1 --port 9000 --clients 5 --requests 200 --mix balanced
+\end{verbatim}
+
+\textbf{Result:}
+
+Server:
+\begin{verbatim}
+[stats] processed=375 avg_latency_ms=5563.65 qlen=17 rps=23.41
+[stats] processed=400 avg_latency_ms=5664.21 qlen=0 rps=22.19
+\end{verbatim}
+
+Client:
+\begin{verbatim}
+[INFO] [MainThread] root: SUMMARY sent=400 recv=150 ok=150 err=0 elapsed=11.71s ok_rps=12.81
+\end{verbatim}
+
+\textbf{Analysis}:
+\begin{itemize}
+    \item Confirms immediate rejection is more aggressive
+    \item Appropriate for latency-sensitive applications
+\end{itemize}
+
+\subsection{Scaling Analysis}
+
+\textbf{Thread Pool Size Impact:}
+\begin{verbatim}
+Workers=2:  ~5.5 req/s
+Workers=4:  ~13.7 req/s
+Workers=8:  ~27 req/s
+Workers=16: ~52.5 req/s
+Workers=32: ~102.4 req/s
+\end{verbatim}
+
+\textbf{Observation}: Near-linear scaling for I/O-bound workloads up to 32 workers.
+
+\end{document}

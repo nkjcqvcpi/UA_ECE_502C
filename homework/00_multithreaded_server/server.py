@@ -71,6 +71,10 @@ class ThreadPoolServer:
         self._threads: list[threading.Thread] = []
         self._accept_thread: Optional[threading.Thread] = None
 
+        # Per-connection locks for safe concurrent writes
+        self._conn_locks: dict[socket.socket, threading.Lock] = {}
+        self._conn_locks_lock = threading.Lock()
+
         # Stats
         self._lock = threading.Lock()
         self._processed = 0
@@ -145,29 +149,57 @@ class ThreadPoolServer:
         server_sock.listen()
         server_sock.settimeout(1.0)
 
-        def handle_client(conn, addr):
+        def handle_client(conn: socket.socket, addr: Tuple[str, int]) -> None:
+            """Handle a single client connection."""
             try:
+                # Set TCP_NODELAY for lower latency
                 conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                # Use makefile for easier buffering and line iteration
-                with conn, conn.makefile('r', encoding='utf-8', errors='replace') as f:
-                    for line in f:
-                        if self._stop.is_set():
+                
+                buf = b""
+                while not self._stop.is_set():
+                    try:
+                        data = conn.recv(4096)
+                        if not data:
+                            # Client closed connection
                             break
-                        task = Task(conn=conn, addr=addr, line=line, enqueued_at=time.time())
-                        try:
-                            if self.reject_when_full:
-                                self.task_q.put(task, block=True, timeout=1.0)
-                            else:
-                                self.task_q.put(task)
-                        except queue.Full:
-                            # Reject
+                        
+                        buf += data
+                        
+                        # Process complete lines
+                        while b"\n" in buf:
+                            line_bytes, buf = buf.split(b"\n", 1)
+                            line = line_bytes.decode("utf-8", errors="replace")
+                            
+                            # Create task
+                            task = Task(conn=conn, addr=addr, line=line, enqueued_at=time.time())
+                            
+                            # Enqueue task with backpressure handling
                             try:
-                                conn.sendall(b"ERR server busy\n")
-                            except OSError:
-                                pass
-                            continue
-            except (OSError, ValueError):
-                pass
+                                if self.reject_when_full:
+                                    self.task_q.put_nowait(task)
+                                else:
+                                    self.task_q.put(task, block=True, timeout=1.0)
+                            except queue.Full:
+                                # Use connection lock to avoid race with worker threads
+                                with self._conn_locks_lock:
+                                    if conn not in self._conn_locks:
+                                        self._conn_locks[conn] = threading.Lock()
+                                    conn_lock = self._conn_locks[conn]
+                                try:
+                                    with conn_lock:
+                                        conn.sendall(b"ERR server busy\n")
+                                except (BrokenPipeError, ConnectionResetError, OSError):
+                                    return
+                    except (ConnectionResetError, BrokenPipeError, OSError):
+                        break
+            finally:
+                try:
+                    conn.close()
+                except OSError:
+                    pass
+                # Clean up connection lock to prevent memory leak
+                with self._conn_locks_lock:
+                    self._conn_locks.pop(conn, None)
         
         try:
             while not self._stop.is_set():
@@ -200,8 +232,14 @@ class ThreadPoolServer:
 
             try:
                 # TODO(5): send response back to client safely
-                # Using the global lock to ensure safety for concurrent writes to the same conn
-                with self._lock:
+                # Get or create per-connection lock
+                with self._conn_locks_lock:
+                    if task.conn not in self._conn_locks:
+                        self._conn_locks[task.conn] = threading.Lock()
+                    conn_lock = self._conn_locks[task.conn]
+                
+                # Use per-connection lock to serialize writes to the same connection
+                with conn_lock:
                     task.conn.sendall(resp_line.encode("utf-8"))
             except (BrokenPipeError, ConnectionResetError, OSError):
                 pass
