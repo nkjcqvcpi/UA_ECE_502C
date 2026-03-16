@@ -102,7 +102,7 @@ The assignment expects you to submit your **source code** (either .py or .cpp) a
 
 ### Correctness criteria
 
-All predefined test cases should pass (`Result: 27/27 checks passed`).
+All predefined test cases should pass (`Result: xx/xx checks passed`).
 
 ### Writeup requirements
 
