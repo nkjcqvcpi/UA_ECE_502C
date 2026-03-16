@@ -92,13 +92,13 @@ Capacity split: `inactive_cap = max(1, capacity // 3)`,  `active_cap = capacity 
 
 ## Requirements
 
-The assignment expects you to submit your **source code** and a **writeup** describing your implementation, test results, and answers to the discussion questions below.
+The assignment expects you to submit your **source code** (either .py or .cpp) and a **writeup** (PDF, 1-2 pages) describing your implementation, test results, and answers to the discussion questions below.
 
 | # | Requirement | Points |
 |---|-------------|--------|
-| 1 | Implement `LRUReplacer.access()` correctly. | 30% |
+| 1 | Implement `LRUReplacer.access()` correctly. | 40% |
 | 2 | Implement `TwoListReplacer.access()` correctly. | 40% |
-| 3 | Testing and writeup. | 30% |
+| 3 | Testing and writeup. | 20% |
 
 ### Correctness criteria
 
