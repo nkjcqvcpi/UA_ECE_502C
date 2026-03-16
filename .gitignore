@@ -5,11 +5,16 @@
 answer*
 
 # =========================
-# C / C++ build artifacts
+# Python cache
 # =========================
 
-# Default build folder
-build
+__pycache__/
+*.py[cod]
+*.pyo
+
+# =========================
+# C / C++ build artifacts
+# =========================
 
 # Object files
 *.o

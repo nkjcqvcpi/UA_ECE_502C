@@ -1,0 +1,92 @@
+[
+  {
+    "name": "lru_beats_fifo",
+    "category": "normal",
+    "description": "Pages 0 and 1 are reused after loading; FIFO evicts them (oldest arrivals) while LRU keeps them (recently used).",
+    "capacity": 3,
+    "refs": [0, 1, 2, 0, 1, 3, 0, 1, 2, 3],
+    "expected": {"FIFO": 8, "LRU": 6, "TwoList": 6}
+  },
+
+  {
+    "name": "lru_advantage_hot_cold",
+    "category": "normal",
+    "description": "Pages 0-2 are a hot working set; pages 3 and 4 are one-time cold intruders. FIFO evicts hot pages (oldest arrivals); LRU and TwoList protect them.",
+    "capacity": 4,
+    "refs": [0, 1, 2, 0, 1, 2, 3, 0, 1, 2, 4, 0, 1, 2],
+    "expected": {"FIFO": 8, "LRU": 5, "TwoList": 5}
+  },
+
+  {
+    "name": "twolist_approximation_cost",
+    "category": "normal",
+    "description": "TwoList promotes pages 0 and 1 to active after two accesses, then protects them past their useful lifetime; it evicts the wrong page when space is needed, costing one extra fault vs LRU.",
+    "capacity": 3,
+    "refs": [0, 1, 0, 1, 0, 2, 3, 2],
+    "expected": {"FIFO": 4, "LRU": 4, "TwoList": 5}
+  },
+
+  {
+    "name": "frequency_locality",
+    "category": "normal",
+    "description": "Realistic Zipf-like workload: page 0 is very hot, pages 1-2 are warm, pages 3-5 are cold. LRU's recency tracking nearly halves the fault rate versus FIFO.",
+    "capacity": 4,
+    "refs": [0,1,0,2,0,1,3,0,2,0,1,0,2,4,0,1,0,2,0,1,
+             3,0,2,0,1,0,2,5,0,1,0,2,0,1,3,0,2,0,1,0,
+             2,4,0,1,0,2,5,0,1,0],
+    "expected": {"FIFO": 19, "LRU": 10, "TwoList": 10}
+  },
+
+  {
+    "name": "working_set_shift",
+    "category": "normal",
+    "description": "A program's working set gradually shifts across three phases (pages 0-4, then 2-6, then 4-8), each phase accessed 25 times. With enough capacity all algorithms adapt equally well.",
+    "capacity": 6,
+    "refs": [0,1,2,3,4, 0,1,2,3,4, 0,1,2,3,4, 0,1,2,3,4, 0,1,2,3,4,
+             2,3,4,5,6, 2,3,4,5,6, 2,3,4,5,6, 2,3,4,5,6, 2,3,4,5,6,
+             4,5,6,7,8, 4,5,6,7,8, 4,5,6,7,8, 4,5,6,7,8, 4,5,6,7,8],
+    "expected": {"FIFO": 9, "LRU": 9, "TwoList": 9}
+  },
+
+  {
+    "name": "beladys_anomaly_3frames",
+    "category": "extreme",
+    "description": "Classic Belady sequence with 3 frames: compare with beladys_anomaly_4frames to see FIFO produce MORE faults with MORE memory.",
+    "capacity": 3,
+    "refs": [3, 2, 1, 0, 3, 2, 4, 3, 2, 1, 0, 4],
+    "expected": {"FIFO": 9, "LRU": 10, "TwoList": 10}
+  },
+
+  {
+    "name": "beladys_anomaly_4frames",
+    "category": "extreme",
+    "description": "Same sequence as beladys_anomaly_3frames with 4 frames: FIFO gets 10 faults (worse than 3 frames!); LRU is immune and improves to 8.",
+    "capacity": 4,
+    "refs": [3, 2, 1, 0, 3, 2, 4, 3, 2, 1, 0, 4],
+    "expected": {"FIFO": 10, "LRU": 8, "TwoList": 8}
+  },
+
+  {
+    "name": "thrashing",
+    "category": "extreme",
+    "description": "Working set is 5 pages but only 4 frames are available; every reference faults for all algorithms.",
+    "capacity": 4,
+    "refs": [0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 0, 1, 2, 3, 4],
+    "expected": {"FIFO": 15, "LRU": 15, "TwoList": 15}
+  },
+
+  {
+    "name": "repeated_scan_resistance",
+    "category": "extreme",
+    "description": "Hot working set (pages 0-3) is re-accessed between three successive 8-page one-time scans. FIFO and LRU lose the hot pages to each scan; TwoList keeps them in the active list across all three scans.",
+    "capacity": 6,
+    "refs": [0,1,2,3,0,1,2,3,
+             10,11,12,13,14,15,16,17,
+             0,1,2,3,0,1,2,3,
+             20,21,22,23,24,25,26,27,
+             0,1,2,3,0,1,2,3,
+             30,31,32,33,34,35,36,37,
+             0,1,2,3,0,1,2,3],
+    "expected": {"FIFO": 40, "LRU": 40, "TwoList": 28}
+  }
+]
