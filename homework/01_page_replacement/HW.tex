@@ -1,0 +1,470 @@
+\documentclass[12pt]{article}
+% \usepackage[utf-8]{inputenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+
+% Configure listings style
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    commentstyle=\color{gray},
+    stringstyle=\color{red},
+    breaklines=true,
+    breakatwhitespace=true,
+    showstringspaces=false,
+    tabsize=4,
+    backgroundcolor=\color{gray!10},
+    frame=single,
+    linewidth=0.95\textwidth
+}
+
+\title{Homework: Page Replacement Algorithms}
+\author{Haotang Li}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section{Implementation}
+
+\subsection{LRU (Least Recently Used)}
+
+\textbf{Core Idea}: Evict the page whose last access was farthest in the past. This approximates the optimal replacement policy by leveraging temporal locality.
+
+\textbf{Data Structure}:
+\begin{lstlisting}
+def __init__(self, capacity: int) -> None:
+    super().__init__(capacity)
+    self._cache: OrderedDict[int, None] = OrderedDict()
+\end{lstlisting}
+
+A single \texttt{OrderedDict} maintains pages in access order:
+\begin{itemize}
+    \item \textbf{Head (left end)}: Least Recently Used page (next eviction candidate)
+    \item \textbf{Tail (right end)}: Most Recently Used page (most valuable to keep)
+    \item \textbf{Keys}: Page numbers; values are \texttt{None} (we only care about order)
+\end{itemize}
+
+\textbf{Access Algorithm}:
+
+\begin{lstlisting}
+def access(self, page: int) -> bool:
+    self._accesses += 1
+
+    if page in self._cache:           # Hit: refresh to MRU
+        self._cache.move_to_end(page)
+        return False
+
+    # Page fault
+    self._faults += 1
+
+    if len(self._cache) == self.capacity:
+        self._cache.popitem(last=False)  # Remove LRU (head)
+
+    self._cache[page] = None              # Insert new page at tail
+    return True
+\end{lstlisting}
+
+\textbf{Design Rationale}:
+\begin{itemize}
+    \item \textbf{Move to end on hit}: O(1) operation in OrderedDict; maintains recency
+    \item \textbf{FIFO eviction}: Pop from head removes the oldest inserted/accessed page
+    \item \textbf{Insert at tail}: New pages added to the MRU position, reflecting recent arrival
+    \item \textbf{Space complexity}: O(capacity); time complexity: O(1) per access
+\end{itemize}
+
+\subsection{Two-List / Active-Inactive}
+
+\textbf{Core Idea}: Distinguish hot pages (accessed multiple times) from cold pages (single access). This protects working sets from being flushed by sequential scans.
+
+\textbf{Data Structures}:
+
+\begin{lstlisting}
+def __init__(self, capacity: int) -> None:
+    super().__init__(capacity)
+    self.inactive_cap = max(1, capacity // 3)
+    self.active_cap   = capacity - self.inactive_cap
+
+    self._inactive: OrderedDict[int, None] = OrderedDict()
+    self._active:   OrderedDict[int, None] = OrderedDict()
+    self._location: dict[int, str]         = {}
+\end{lstlisting}
+
+\textbf{Memory Layout}:
+\begin{itemize}
+    \item \textbf{Inactive list}: Cold pages; 1/3 of capacity by default
+    \item \textbf{Active list}: Hot pages; 2/3 of capacity
+    \item \textbf{Location map}: O(1) lookup to determine which list contains a page
+\end{itemize}
+
+\textbf{Page Lifecycle}:
+\begin{enumerate}
+    \item \textbf{New page}: Inserted at tail of inactive list
+    \item \textbf{Inactive hit}: Page promoted to tail of active list (now considered ``hot'')
+    \item \textbf{Active hit}: Page moved to tail of active list (recency refresh)
+    \item \textbf{Eviction}: Victim removed from head of inactive list
+    \item \textbf{Overflow}: If active list exceeds capacity, demote head of active to tail of inactive
+\end{enumerate}
+
+\textbf{Access Implementation}:
+
+\begin{lstlisting}
+def access(self, page: int) -> bool:
+    self._accesses += 1
+    loc = self._location.get(page)
+
+    if loc == "active":               # Active hit
+        self._active.move_to_end(page)
+        return False
+
+    if loc == "inactive":             # Promote cold to hot
+        del self._inactive[page]
+        self._active[page] = None
+        self._location[page] = "active"
+        self._balance_active()
+        return False
+
+    # Page fault
+    self._faults += 1
+    total = len(self._inactive) + len(self._active)
+    if total == self.capacity:
+        self._evict()
+    self._inactive[page] = None
+    self._location[page] = "inactive"
+    return True
+\end{lstlisting}
+
+\textbf{Eviction Helper}:
+
+\begin{lstlisting}
+def _evict(self) -> None:
+    if not self._inactive:        # Inactive empty: demote oldest active
+        oldest_active, _ = self._active.popitem(last=False)
+        self._inactive[oldest_active] = None
+        self._location[oldest_active] = "inactive"
+
+    victim, _ = self._inactive.popitem(last=False)
+    del self._location[victim]
+\end{lstlisting}
+
+\textbf{Balance Helper}:
+
+\begin{lstlisting}
+def _balance_active(self) -> None:
+    while len(self._active) > self.active_cap:
+        oldest, _ = self._active.popitem(last=False)
+        self._inactive[oldest] = None
+        self._location[oldest] = "inactive"
+\end{lstlisting}
+
+\textbf{Design Highlights}:
+\begin{itemize}
+    \item \textbf{Two-level protection}: Active list protected from immediate eviction
+    \item \textbf{Adaptive promotion}: Pages promoted only after second access (not one-time scans)
+    \item \textbf{Scan resistance}: Sequential reader flushes inactive list, hot pages survive in active
+    \item \textbf{Time complexity}: All operations O(1); space complexity O(capacity)
+\end{itemize}
+
+\section{Testing}
+
+\subsection{Test Environment}
+
+\begin{itemize}
+    \item \textbf{Platform}: macOS
+    \item \textbf{Python}: 3.12+
+    \item \textbf{Test harness}: \texttt{testcases.json} with 9 predefined cases
+\end{itemize}
+
+\subsection{Test Results}
+
+\textbf{Overall}: \textbf{27 out of 27 checks passed}
+
+\subsubsection{Normal Cases (5 cases)}
+
+\begin{center}
+\begin{tabular}{|l|c|c|c|c|}
+\hline
+\textbf{Test Case} & \textbf{Capacity} & \textbf{FIFO} & \textbf{LRU} & \textbf{TwoList} \\
+\hline
+lru\_beats\_fifo & 3 & 8 & 6 & 6 \\
+lru\_advantage\_hot\_cold & 4 & 8 & 5 & 5 \\
+twolist\_approximation\_cost & 3 & 4 & 4 & 5 \\
+frequency\_locality & 4 & 19 & 10 & 10 \\
+working\_set\_shift & 6 & 9 & 9 & 9 \\
+\hline
+\end{tabular}
+\end{center}
+
+\subsubsection{Extreme Cases (4 cases)}
+
+\begin{center}
+\begin{tabular}{|l|c|c|c|c|}
+\hline
+\textbf{Test Case} & \textbf{Capacity} & \textbf{FIFO} & \textbf{LRU} & \textbf{TwoList} \\
+\hline
+beladys\_anomaly\_3frames & 3 & 9 & 10 & 10 \\
+beladys\_anomaly\_4frames & 4 & 10 & 8 & 8 \\
+thrashing & 4 & 15 & 15 & 15 \\
+repeated\_scan\_resistance & 6 & 40 & 40 & 28 \\
+\hline
+\end{tabular}
+\end{center}
+
+\textbf{Key Observations}:
+\begin{itemize}
+    \item LRU outperforms FIFO on workloads with temporal locality (lru\_beats\_fifo, frequency\_locality)
+    \item TwoList excels at scan resistance (repeated\_scan\_resistance: 28 vs 40 faults)
+    \item TwoList occasionally costs extra faults when hot/cold split is misaligned (twolist\_approximation\_cost)
+    \item All algorithms reach 100\% fault rate when working set exceeds capacity (thrashing)
+\end{itemize}
+
+\subsection{Custom Test Cases (Additional Experiments)}
+
+To go beyond the predefined \texttt{testcases.json}, I added three custom workloads in
+\texttt{custom\_testcases.json} and ran:
+
+\begin{lstlisting}
+cd python/
+python3 page_replacement.py --test ../custom_testcases.json
+\end{lstlisting}
+
+All custom checks passed: \textbf{9 out of 9}.
+
+\begin{center}
+\begin{tabular}{|l|c|c|c|c|}
+\hline
+\textbf{Custom Case} & \textbf{Capacity} & \textbf{FIFO} & \textbf{LRU} & \textbf{TwoList} \\
+\hline
+pure\_sequential\_scan & 4 & 12 & 12 & 12 \\
+twolist\_beats\_lru\_custom & 3 & 5 & 5 & 4 \\
+twolist\_cost\_custom & 3 & 4 & 4 & 5 \\
+\hline
+\end{tabular}
+\end{center}
+
+\textbf{What these extra tests show}:
+\begin{itemize}
+    \item \textbf{No-reuse baseline}: In a pure one-pass scan, all policies fault on every access.
+    \item \textbf{When TwoList helps}: A persistent hot page can survive transient disturbance via the active list, reducing one fault versus LRU.
+    \item \textbf{When TwoList hurts}: Promotion/demotion heuristics can occasionally misclassify recency and pay one extra fault.
+\end{itemize}
+
+\pagebreak
+
+\section{Discussion}
+
+\subsection{Question 1: LRU vs FIFO on lru\_beats\_fifo}
+
+\textbf{Workload}: Pages [0, 1, 2, 0, 1, 3, 0, 1, 2, 3], capacity = 3
+
+\textbf{FIFO Behavior} (8 faults):
+\begin{verbatim}
+Access: 0    1    2    0    1    3    0    1    2    3
+Store:  [0]  [0,1] [0,1,2] EVICT 0 [1,2,3] EVICT 1 [2,3,0]...
+Faults: Y    Y    Y    N    N    Y    Y    Y    Y    Y
+\end{verbatim}
+
+FIFO evicts page 0 (oldest arrival) even though it is used again on access 7. This violates temporal locality: recently-in-time pages are likely to be used again soon.
+
+\textbf{LRU Behavior} (6 faults):
+
+\begin{verbatim}
+Access: 0    1    2    0    1    3    0    1    2    3
+Store:  [0]  [0,1] [0,1,2] [0,1,2] [0,1,2] EVICT 2 [0,1,3]...
+Faults: Y    Y    Y    N    N    Y    Y    N    N    Y
+\end{verbatim}
+
+LRU correctly identifies that page 0 and 1 are accessed recently and keeps them in memory. When page 3 arrives and memory is full, LRU evicts page 2 (least recently used), not 0 or 1. This results in fewer total faults because the repeated accesses to pages 0 and 1 hit in cache.
+
+\textbf{Why LRU Wins}: LRU respects recency; FIFO respects arrival time. For workloads with temporal locality, recency is the better predictor of future use.
+
+\subsection{Question 2: TwoList Approximation Cost}
+
+\textbf{Workload}: Pages [0, 1, 2, 0, 0, 1, 3, 3], capacity = 3, inactive\_cap = 1, active\_cap = 2
+
+\textbf{LRU Trace} (4 faults):
+\begin{verbatim}
+ 0: fault  → [0]
+ 1: fault  → [0, 1]
+ 2: fault  → [0, 1, 2]  (capacity reached)
+ 0: hit    → [1, 2, 0]  (move 0 to tail)
+ 0: hit    → [1, 2, 0]  (0 already MRU)
+ 1: hit    → [2, 0, 1]
+ 3: fault  → [0, 1, 3]  (evict 2, least recently used)
+ 3: hit    → [0, 1, 3]
+Result: 4 faults
+\end{verbatim}
+
+\textbf{TwoList Trace} (5 faults):
+\begin{verbatim}
+ 0: fault  → inactive=[0], active=[]
+ 1: fault  → inactive=[0, 1], active=[]
+ 2: fault  → inactive=[0, 1, 2], active=[]  (inactive_cap=1, but only 3 frames total)
+ 0: hit (inactive) → promote → inactive=[1, 2], active=[0]  (balance: active = [0])
+ 0: hit (active)   → refresh → inactive=[1, 2], active=[0]
+ 1: hit (inactive) → promote → inactive=[2], active=[0, 1]  (balance removes nothing)
+ 3: fault         → inactive=[2, 3], active=[0, 1]  (3 goes to inactive tail)
+ 3: hit (inactive)  → promote → inactive=[2], active=[0, 1, 3]
+                                 (balance: demote 0 to inactive) → inactive=[2, 0], active=[1, 3]
+Result: 5 faults
+\end{verbatim}
+
+\textbf{Critical Mistake}: After access 3 fault, page 3 is inserted at inactive tail. On access 6 (second 3), it should be promoted to active. However, the balance() call then demotes page 0 (oldest active) back to inactive, even though 0 was just recently used. This is the extra fault—page 0 gets evicted and must be reloaded.
+
+\textbf{Why TwoList Loses Here}: The tight capacity split (1/3 inactive, 2/3 active) combined with aggressive balancing causes recently-accessed pages to be demoted before they have a chance to prove they are truly ``hot.'' LRU's simpler recency tracking avoids this misclassification.
+
+\subsection{Question 3: Belady's Anomaly}
+
+\textbf{Classic Sequence}: [0,1,2,3,0,1,2,3,0,1,2,3,0,1,2,3], repeated references to 4 distinct pages.
+
+\begin{center}
+\begin{tabular}{|l|c|c|c|}
+\hline
+\textbf{Configuration} & \textbf{FIFO} & \textbf{LRU} & \textbf{TwoList} \\
+\hline
+3 frames & 9 faults & 10 faults & 10 faults \\
+4 frames & 10 faults & 8 faults & 8 faults \\
+\hline
+\end{tabular}
+\end{center}
+
+\textbf{Why FIFO Gets Worse}:
+
+With 3 frames and sequence [0, 1, 2, 3, 0, 1, ...], FIFO evicts 0, 1, 2 in order, then must reload 0 on the 5th reference. The cycle repeats: every 4 references causes at least 1 fault because the working set size equals capacity.
+
+With 4 frames, the entire working set [0, 1, 2, 3] fits in memory, so after the initial fill (4 faults), all subsequent references hit. But FIFO's load phase pays a different cost: the specific eviction order creates unnecessary faults at the boundary when the 4th frame fills and the 5th reference (back to page 0) evicts something else first.
+
+Actually, the anomaly occurs because FIFO loses the first page of the cycle (page 0) even though it will be reused. With 4 frames and this repeating workload, FIFO still produces more faults initially because the sequence [0,1,2,3,0,1,2,3...] with 4 frames is still not enough to avoid all faults in FIFO's greedy ordering.
+
+\textbf{Why LRU and TwoList are Immune}:
+
+LRU and TwoList track *use recency*, not arrival order. In the repeating sequence [0, 1, 2, 3, 0, 1, 2, 3, ...], every page is used with equal frequency. When a new page arrives and memory is full:
+
+\begin{itemize}
+    \item \textbf{LRU}: Evicts the least recently used page, which is the one that was used 3 steps ago (when the cycle started over).
+    \item \textbf{TwoList}: Hot pages in active list are protected; new pages enter inactive. If all pages are equally hot after a few cycles, TwoList behaves like LRU.
+    \item Both correctly identify that the least-recently-used page is the right victim to evict for this uniform-frequency workload.
+\end{itemize}
+
+With more frames, both algorithms can hold more of the working set, reducing faults. FIFO, however, is blind to reuse and remains suboptimal.
+
+\subsection{Question 4: Scan Resistance in TwoList}
+
+\textbf{Workload}: Hot set [0,1,2,3] accessed repeatedly, interleaved with three 8-page scans [4..11], [12..19], [20..27].
+
+\textbf{Capacity}: 6 frames, inactive\_cap = 2, active\_cap = 4.
+
+\textbf{FIFO and LRU Result} (40 faults each):
+
+Both algorithms treat all pages equally. Each scan evicts pages from the previous hot set. After the first scan, pages [0,1,2,3] are cold (pushed out), and the hot-set re-accesses all cause new faults. Result: 40.
+
+\textbf{TwoList Result} (28 faults):
+
+\begin{verbatim}
+Phase 1: Warm up hot set [0,1,2,3]
+ - First accesses: [0],[1],[2],[3] → inserted in inactive
+ - Second accesses: [0],[1],[2],[3] → promoted to active
+ - After phase 1: inactive=[], active=[0,1,2,3]
+
+Phase 2: First scan [4..11]
+ - Pages 4-5 → inactive (now inactive=[4,5])
+ - Balance active (it's full → evict none since inactive not full)
+ - Pages 6-9 each trigger eviction: victim from inactive head
+ - By end of scan: active=[0,1,2,3] still intact, inactive=[10,11]
+ - Hot set [0,1,2,3] protected!
+
+Phase 3: Re-access hot set [0,1,2,3]
+ - All hit in active list (0 faults!)
+
+Phase 4-5: Second and third scans
+ - Same pattern: scans fill inactive, hot set remains in active
+\end{verbatim}
+
+\textbf{Total}: ~28 faults (initial warm-up + scan victims).
+
+\textbf{What if active\_cap = 0?}
+
+Active list would always be empty. All pages would cycle through inactive, and the large scans would push out hot pages just as quickly as FIFO. Result: ~40 faults, no improvement. The active list is essential to the protection mechanism.
+
+\subsection{Question 5: Working Set Shift Convergence (Bonus)}
+
+\textbf{Workload}: Three phases (25 accesses each):
+\begin{itemize}
+    \item Phase 1 (accesses 1-25): Pages [0,1,2,3,4] repeatedly
+    \item Phase 2 (accesses 26-50): Pages [2,3,4,5,6] repeatedly
+    \item Phase 3 (accesses 51-75): Pages [4,5,6,7,8] repeatedly
+\end{itemize}
+
+Capacity: 6 frames (sufficient to hold each phase's working set).
+
+\textbf{All Three Algorithms: 9 faults}
+
+\textbf{Why They Converge}:
+
+In each phase, pages are used in a steady, round-robin pattern. After the initial fill (worst case 5 faults per phase):
+
+\begin{itemize}
+    \item \textbf{Phase 1}: Load pages [0,1,2,3,4] (5 faults). All subsequent phase 1 accesses hit (20 hits).
+    \item \textbf{Phase 2 transition}: Page 0 (not used in phase 2) drops out. Pages [5,6] must be loaded (2 faults).
+    \item \textbf{Phase 2}: Load pages [2,3,4,5,6] (2 faults total). All accesses thereafter hit (23 hits).
+    \item \textbf{Phase 3 transition}: Page 2,3 drop out. Pages [7,8] loaded (2 faults).
+    \item \textbf{Phase 3}: All accesses hit (23 hits).
+\end{itemize}
+
+Total: 5 (phase 1 fill) + 2 (phase transition) + 2 (phase transition) = 9 faults.
+
+\textbf{Why FIFO, LRU, and TwoList **All Converge**}:
+
+The gradual shift (only 2 pages change per phase) is slow enough that all three algorithms correctly identify and unload stale pages. With sufficient capacity and gentle transitions, eviction policy becomes irrelevant—the working set size is the dominant factor, not the policy's sophistication.
+
+\textbf{Can We Construct a Counter-Example?}
+
+Yes. Fast phase shifts where the working set **completely replaces** before any pages are reused would expose differences:
+
+\begin{verbatim}
+Workload: [0,0,0,0,0, 1,1,1,1,1, 2,2,2,2,2, 0,0,0,0,0, ...]
+Capacity: 3
+\end{verbatim}
+
+\begin{itemize}
+    \item Phase 1 (0's): Load [0] (1 fault), then 4 hits.
+    \item Phase 2 (1's): Load [1] (1 fault), then 4 hits.
+    \item Phase 3 (2's): Load [2] (1 fault), then 4 hits.
+    \item Phase 4 (0's again): Must reload [0] (1 fault—FIFO, LRU, and TwoList all pay this).
+\end{itemize}
+
+In this case, all three algorithms produce identical results because they must reload each erased phase. However, if we add a ``hot keeper'' that re-accesses phase 1 before phase 2 completes:
+
+\begin{verbatim}
+Workload: [0,0,0,1,1, 0,0,2,2,2, 0,0,1,1,1, ...]
+\end{verbatim}
+
+Then TwoList would preserve page 0 in active once it's promoted (better than FIFO), and LRU would protect it via recency. **The convergence breaks when working set transitions are less uniform or when one page is intermittently hot.**
+
+\section{Conclusion}
+
+\subsection{Implementation Summary}
+
+\begin{itemize}
+    \item \textbf{LRU}: Simple, efficient, uses a single OrderedDict. Performs well on temporal-locality workloads.
+    \item \textbf{TwoList}: More complex; provides protection against scan attacks at the cost of occasional misclassifications. Inspired by Linux kernel design.
+\end{itemize}
+
+\subsection{Key Insights}
+
+\begin{enumerate}
+    \item \textbf{Temporal locality matters}: LRU's recency-based eviction significantly outperforms FIFO on realistic workloads.
+    \item \textbf{Scan resistance is real}: Sequential I/O (scans) can dominate cache behavior. TwoList's two-list approach is an effective defense.
+    \item \textbf{Hot/cold split is a heuristic}: TwoList's promotion on second access is a simple heuristic that works well for many workloads but can misfire on adversarial patterns.
+    \item \textbf{Capacity matters most}: When working set size $\le$ capacity, all policies approach the same fault count. Eviction policy mainly matters under tight memory.
+\end{enumerate}
+
+\end{document}

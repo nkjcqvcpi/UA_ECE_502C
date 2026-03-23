@@ -152,9 +152,7 @@ class LRUReplacer(PageReplacer):
 
     def __init__(self, capacity: int) -> None:
         super().__init__(capacity)
-        # TODO: initialize your data structure(s).
-        # Hint: a single OrderedDict is sufficient.
-        pass  # replace this with your initialization
+        self._cache: OrderedDict[int, None] = OrderedDict()
 
     # ------------------------------------------------------------------
 
@@ -176,13 +174,24 @@ class LRUReplacer(PageReplacer):
                - Insert the new page at the tail (most-recently-used position).
                - Return True.
         """
-        # TODO: implement
-        raise NotImplementedError
+        self._accesses += 1
+
+        if page in self._cache:           # ---- hit: refresh to MRU ----
+            self._cache.move_to_end(page)
+            return False
+
+        # ---- page fault ----
+        self._faults += 1
+
+        if len(self._cache) == self.capacity:   # memory full → evict LRU
+            self._cache.popitem(last=False)
+
+        self._cache[page] = None              # insert at tail (MRU)
+        return True
 
     def frames(self) -> list[int]:
         """Return pages in LRU order: index 0 = least recently used."""
-        # TODO: implement
-        raise NotImplementedError
+        return list(self._cache.keys())
 
 
 # ===========================================================================
@@ -244,9 +253,9 @@ class TwoListReplacer(PageReplacer):
         self.inactive_cap = max(1, capacity // 3)
         self.active_cap   = capacity - self.inactive_cap
 
-        # TODO: initialize your data structure(s).
-        # Hint: two OrderedDicts and one plain dict for self._location.
-        pass  # replace this with your initialization
+        self._inactive: OrderedDict[int, None] = OrderedDict()
+        self._active:   OrderedDict[int, None] = OrderedDict()
+        self._location: dict[int, str]         = {}  # page → "active" | "inactive"
 
     # ------------------------------------------------------------------
 
@@ -276,11 +285,32 @@ class TwoListReplacer(PageReplacer):
 
         Remember to increment self._accesses at the top.
         """
-        # TODO: implement
-        raise NotImplementedError
+        self._accesses += 1
+
+        loc = self._location.get(page)
+
+        if loc == "active":               # Case A — hot hit
+            self._active.move_to_end(page)
+            return False
+
+        if loc == "inactive":             # Case B — cold hit → promote
+            del self._inactive[page]
+            self._active[page] = None
+            self._location[page] = "active"
+            self._balance_active()
+            return False
+
+        # Case C — page fault
+        self._faults += 1
+        total = len(self._inactive) + len(self._active)
+        if total == self.capacity:
+            self._evict()
+        self._inactive[page] = None
+        self._location[page] = "inactive"
+        return True
 
     # ------------------------------------------------------------------
-    # Helpers — implement these too
+    # Helpers
     # ------------------------------------------------------------------
 
     def _evict(self) -> None:
@@ -298,8 +328,13 @@ class TwoListReplacer(PageReplacer):
         2. Pop the head of inactive  (the eviction victim).
         3. Delete the victim from self._location.
         """
-        # TODO: implement
-        raise NotImplementedError
+        if not self._inactive:            # inactive empty → demote oldest active
+            oldest_active, _ = self._active.popitem(last=False)
+            self._inactive[oldest_active] = None
+            self._location[oldest_active] = "inactive"
+
+        victim, _ = self._inactive.popitem(last=False)
+        del self._location[victim]
 
     def _balance_active(self) -> None:
         """
@@ -310,13 +345,14 @@ class TwoListReplacer(PageReplacer):
             - Append it to the tail of inactive  (demote).
             - Update self._location.
         """
-        # TODO: implement
-        raise NotImplementedError
+        while len(self._active) > self.active_cap:
+            oldest, _ = self._active.popitem(last=False)
+            self._inactive[oldest] = None
+            self._location[oldest] = "inactive"
 
     def frames(self) -> list[int]:
         """Return all pages currently in memory (active + inactive)."""
-        # TODO: implement
-        raise NotImplementedError
+        return list(self._inactive.keys()) + list(self._active.keys())
 
 
 # ===========================================================================

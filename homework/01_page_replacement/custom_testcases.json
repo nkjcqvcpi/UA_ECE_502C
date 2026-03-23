@@ -1,0 +1,38 @@
+[
+  {
+    "name": "pure_sequential_scan",
+    "category": "custom",
+    "description": "One-pass scan with no reuse (0..11). Any policy should fault on every access.",
+    "capacity": 4,
+    "refs": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+    "expected": {
+      "FIFO": 12,
+      "LRU": 12,
+      "TwoList": 12
+    }
+  },
+  {
+    "name": "twolist_beats_lru_custom",
+    "category": "custom",
+    "description": "A persistent hot page (0) is revisited after a brief disturbance; TwoList keeps it in active and saves one fault.",
+    "capacity": 3,
+    "refs": [0, 0, 0, 0, 0, 0, 1, 2, 3, 0],
+    "expected": {
+      "FIFO": 5,
+      "LRU": 5,
+      "TwoList": 4
+    }
+  },
+  {
+    "name": "twolist_cost_custom",
+    "category": "custom",
+    "description": "TwoList promotion/demotion overhead can misclassify recency and pay one extra fault versus LRU.",
+    "capacity": 3,
+    "refs": [0, 0, 0, 0, 0, 0, 1, 2, 3, 1],
+    "expected": {
+      "FIFO": 4,
+      "LRU": 4,
+      "TwoList": 5
+    }
+  }
+]
